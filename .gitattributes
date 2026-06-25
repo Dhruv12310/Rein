@@ -1,0 +1,3 @@
+# Normalize line endings to LF in the repository so the same files read identically on
+# Windows, macOS, and the Vercel build, and diffs stay clean across machines.
+* text=auto eol=lf
