@@ -35,6 +35,15 @@ export async function createBudget(params: {
   return rows[0].id;
 }
 
+// Adjust a budget's remaining room directly, so a test can block a purchase on budget and then
+// open room to prove the same payment succeeds the second time.
+export async function setRemaining(budgetId: string, remaining: bigint): Promise<void> {
+  await getPool().query("UPDATE budgets SET remaining_cents = $1 WHERE id = $2", [
+    remaining.toString(),
+    budgetId,
+  ]);
+}
+
 // Read as a string and convert to BigInt so cents stay exact.
 export async function remainingCents(budgetId: string): Promise<bigint> {
   const { rows } = await getPool().query<{ remaining_cents: string }>(
@@ -84,6 +93,9 @@ export async function cleanup(params: {
   const pool = getPool();
   if (params.transactionIds.length > 0) {
     await pool.query("DELETE FROM ledger_entries WHERE transaction_id = ANY($1::uuid[])", [
+      params.transactionIds,
+    ]);
+    await pool.query("DELETE FROM redeemed_payments WHERE transaction_id = ANY($1::uuid[])", [
       params.transactionIds,
     ]);
     await pool.query("DELETE FROM transactions WHERE id = ANY($1::uuid[])", [
@@ -142,6 +154,14 @@ export async function countMandatesForAgent(agentId: string): Promise<number> {
     [agentId],
   );
   return Number(rows[0].count);
+}
+
+export async function paymentRedeemed(paymentHash: string): Promise<boolean> {
+  const { rows } = await getPool().query<{ count: string }>(
+    "SELECT count(*) AS count FROM redeemed_payments WHERE payment_hash = $1",
+    [paymentHash],
+  );
+  return Number(rows[0].count) > 0;
 }
 
 // A simple N-party rendezvous. Every caller awaits until `parties` of them have arrived, then

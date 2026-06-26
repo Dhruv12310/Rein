@@ -91,6 +91,15 @@ export async function purchase(
   return { status: "blocked", transactionId: result.transactionId, reason: result.reason, retries };
 }
 
+// A unique-violation, SQLSTATE 23505, means the row already exists in a committed transaction.
+// For the single-use gate this is a replay, kept distinct from the 40001 of a concurrent
+// uncommitted conflict, which the OCC retry handles instead. Confirmed against the live cluster.
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" && err !== null && (err as { code?: unknown }).code === "23505"
+  );
+}
+
 // One full attempt: a single dedicated client, BEGIN through COMMIT. Never split this across
 // separate pool checkouts, the whole transaction lives on one connection.
 async function runPurchaseTxn(
@@ -129,7 +138,35 @@ async function runPurchaseTxn(
       await afterRead();
     }
 
-    // Approve. The unconditional UPDATE on each applicable budget row is the conflict point:
+    // Approve. Generate the transaction id up front so the single-use row can reference it
+    // before the transaction row itself is written.
+    const transactionId = randomUUID();
+
+    // Claim the payment as single-use, first of the approval writes. The payment content_hash is
+    // the primary key of redeemed_payments, so a payment already redeemed in a committed
+    // transaction collides here with a 23505 and the whole approval aborts before any money
+    // moves. That is a replay: roll back and record a block, never an OCC retry. A concurrent
+    // redemption instead conflicts at COMMIT with 40001, which the retry handles, and on the
+    // retry the now-committed row turns this into the same 23505 replay path.
+    try {
+      await client.query(
+        "INSERT INTO redeemed_payments (payment_hash, transaction_id) VALUES ($1, $2)",
+        [verification.paymentHash, transactionId],
+      );
+    } catch (err) {
+      if (!isUniqueViolation(err)) {
+        throw err; // a 40001 or anything else flows to the outer catch and the OCC retry
+      }
+      // The failed insert aborted this transaction, so no budget moved and no chain persisted.
+      // Roll it back and record the replay block in a fresh transaction.
+      await client.query("ROLLBACK").catch(() => {});
+      await client.query("BEGIN");
+      const blockedId = await insertBlockedTransaction(client, req, "payment_already_redeemed");
+      await client.query("COMMIT");
+      return { status: "blocked", transactionId: blockedId, reason: "payment_already_redeemed" };
+    }
+
+    // The unconditional UPDATE on each applicable budget row is the concurrency conflict point:
     // two purchases racing the same budget both write this row and one loses at COMMIT with
     // 40001. No SELECT FOR UPDATE, the write itself is what conflicts.
     for (const budget of budgets) {
@@ -147,7 +184,7 @@ async function runPurchaseTxn(
       verification,
       req.agentId,
     );
-    const transactionId = await insertApprovedTransaction(client, req, paymentMandateId);
+    await insertApprovedTransaction(client, req, transactionId, paymentMandateId);
     await insertLedgerEntries(client, transactionId, req.amountCents);
     await client.query("COMMIT");
     return { status: "approved", transactionId };
@@ -201,15 +238,15 @@ function rejectionReason(budgets: BudgetRow[], amountCents: bigint): string | nu
 async function insertApprovedTransaction(
   client: PoolClient,
   req: PurchaseRequest,
+  transactionId: string,
   paymentMandateId: string,
-): Promise<string> {
-  const { rows } = await client.query<{ id: string }>(
-    `INSERT INTO transactions (payment_mandate_id, amount_cents, category, vendor, status, reason)
-     VALUES ($1, $2, $3, $4, 'approved', NULL)
-     RETURNING id`,
-    [paymentMandateId, req.amountCents.toString(), req.category, req.vendor],
+): Promise<void> {
+  // The caller supplies the id so the single-use row can reference it before this insert runs.
+  await client.query(
+    `INSERT INTO transactions (id, payment_mandate_id, amount_cents, category, vendor, status, reason)
+     VALUES ($1, $2, $3, $4, $5, 'approved', NULL)`,
+    [transactionId, paymentMandateId, req.amountCents.toString(), req.category, req.vendor],
   );
-  return rows[0].id;
 }
 
 async function insertBlockedTransaction(
