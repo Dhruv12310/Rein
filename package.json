@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "eslint",
     "migrate": "tsx scripts/migrate.ts",
-    "health": "tsx scripts/health.ts"
+    "health": "tsx scripts/health.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@aws-sdk/credential-providers": "^3.1075.0",
@@ -30,6 +31,7 @@
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
     "tsx": "^4.22.4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.9"
   }
 }
