@@ -93,7 +93,55 @@ export async function cleanup(params: {
   if (params.budgetIds.length > 0) {
     await pool.query("DELETE FROM budgets WHERE id = ANY($1::uuid[])", [params.budgetIds]);
   }
+  // Mandates carry agent_id, so the test's whole chain clears by agent in one statement.
+  await pool.query("DELETE FROM mandates WHERE agent_id = $1", [params.agentId]);
   await pool.query("DELETE FROM agents WHERE id = $1", [params.agentId]);
+}
+
+export type MandateChainRow = {
+  id: string;
+  type: string;
+  parent_mandate_id: string | null;
+  content_hash: string;
+  signature: string;
+  scope: unknown;
+};
+
+async function fetchMandate(id: string): Promise<MandateChainRow | undefined> {
+  const { rows } = await getPool().query<MandateChainRow>(
+    "SELECT id, type, parent_mandate_id, content_hash, signature, scope FROM mandates WHERE id = $1",
+    [id],
+  );
+  return rows[0];
+}
+
+// Walk the persisted chain for an approved transaction: payment, then its parent cart, then the
+// intent, following parent_mandate_id. Proves the chain is queryable end to end.
+export async function loadMandateChainForTransaction(transactionId: string): Promise<{
+  payment?: MandateChainRow;
+  cart?: MandateChainRow;
+  intent?: MandateChainRow;
+}> {
+  const { rows } = await getPool().query<{ payment_mandate_id: string }>(
+    "SELECT payment_mandate_id FROM transactions WHERE id = $1",
+    [transactionId],
+  );
+  const paymentId = rows[0]?.payment_mandate_id;
+  if (!paymentId) {
+    return {};
+  }
+  const payment = await fetchMandate(paymentId);
+  const cart = payment?.parent_mandate_id ? await fetchMandate(payment.parent_mandate_id) : undefined;
+  const intent = cart?.parent_mandate_id ? await fetchMandate(cart.parent_mandate_id) : undefined;
+  return { payment, cart, intent };
+}
+
+export async function countMandatesForAgent(agentId: string): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    "SELECT count(*) AS count FROM mandates WHERE agent_id = $1",
+    [agentId],
+  );
+  return Number(rows[0].count);
 }
 
 // A simple N-party rendezvous. Every caller awaits until `parties` of them have arrived, then

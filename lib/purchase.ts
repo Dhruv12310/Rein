@@ -1,5 +1,12 @@
+import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { getPool } from "./db";
+import {
+  verifyMandateChain,
+  type KeyResolver,
+  type MandateBundle,
+  type VerifyResult,
+} from "./mandates";
 import { withOccRetry, type RetryOptions } from "./occ";
 
 export type PurchaseRequest = {
@@ -8,6 +15,7 @@ export type PurchaseRequest = {
   category: string;
   vendor: string;
   period?: string; // defaults to the current month, the way budgets store it
+  mandates: MandateBundle; // the signed Intent, Cart, Payment chain authorizing this purchase
 };
 
 export type PurchaseDecision =
@@ -21,6 +29,9 @@ type PurchaseOutcome =
   | { status: "blocked"; transactionId: string; reason: string };
 
 export type PurchaseOptions = RetryOptions & {
+  // How the verifier looks up signer public keys. Required for a real purchase; if it is absent
+  // every signer is unknown and the mandate gate fails closed.
+  resolveKey?: KeyResolver;
   // Test seam, unused in production. Invoked after the budgets are read and before the budget
   // update, so a concurrency test can hold every racing transaction at the same point and
   // release them into the write together, which forces the write-write conflict every run
@@ -38,12 +49,6 @@ export function currentPeriod(date: Date = new Date()): string {
 
 type BudgetRow = { id: string; category: string | null; remaining_cents: string };
 
-// Phase 2 hook. The payment mandate signature and the intent to cart to payment chain get
-// verified here, before any read or write, and an invalid chain rejects the purchase. Phase 1
-// has no mandates yet, so this is intentionally a no-op that always passes. No signing logic
-// belongs in Phase 1 (see docs/PLAN.md, Phase C).
-async function verifyPaymentMandate(_req: PurchaseRequest): Promise<void> {}
-
 export async function purchase(
   req: PurchaseRequest,
   options: PurchaseOptions = {},
@@ -56,10 +61,28 @@ export async function purchase(
   }
   const period = req.period ?? currentPeriod();
 
+  // Mandate verification is pure crypto and deterministic. I fix `now` once so the expiry
+  // decision is stable across retries, and run the gate inside each transaction attempt. A
+  // mandate failure returns a blocked result, never a 40001, so it cannot drive the OCC retry.
+  const now = new Date();
+  const resolveKey = options.resolveKey ?? (() => undefined);
+  const verify = (): VerifyResult =>
+    verifyMandateChain(
+      req.mandates,
+      {
+        amountCents: req.amountCents,
+        category: req.category,
+        vendor: req.vendor,
+        agentId: req.agentId,
+        now,
+      },
+      resolveKey,
+    );
+
   // The retry helper runs the whole transaction again on a 40001, so retries always decide
   // against a freshly read balance. retries is surfaced so callers and tests can see contention.
   const { result, retries } = await withOccRetry(
-    () => runPurchaseTxn(req, period, options.afterRead),
+    () => runPurchaseTxn(req, period, verify, options.afterRead),
     options,
   );
   if (result.status === "approved") {
@@ -73,6 +96,7 @@ export async function purchase(
 async function runPurchaseTxn(
   req: PurchaseRequest,
   period: string,
+  verify: () => VerifyResult,
   afterRead?: () => Promise<void>,
 ): Promise<PurchaseOutcome> {
   const client = await getPool().connect();
@@ -80,8 +104,14 @@ async function runPurchaseTxn(
   try {
     await client.query("BEGIN");
 
-    // Phase 2 mandate verification goes here, before any read or write.
-    await verifyPaymentMandate(req);
+    // Verify the mandate chain before any read or write. A failure is a deterministic rejection,
+    // so record it as a blocked attempt with its specific reason and commit. This never retries.
+    const verification = verify();
+    if (!verification.ok) {
+      const transactionId = await insertBlockedTransaction(client, req, verification.reason);
+      await client.query("COMMIT");
+      return { status: "blocked", transactionId, reason: verification.reason };
+    }
 
     const budgets = await readApplicableBudgets(client, req, period);
 
@@ -89,7 +119,7 @@ async function runPurchaseTxn(
     // the audit trail, write no ledger entries, and commit. Recording blocks is required.
     const rejection = rejectionReason(budgets, req.amountCents);
     if (rejection) {
-      const transactionId = await insertTransaction(client, req, "blocked", rejection);
+      const transactionId = await insertBlockedTransaction(client, req, rejection);
       await client.query("COMMIT");
       return { status: "blocked", transactionId, reason: rejection };
     }
@@ -108,7 +138,16 @@ async function runPurchaseTxn(
         [req.amountCents.toString(), budget.id],
       );
     }
-    const transactionId = await insertTransaction(client, req, "approved", null);
+    // Persist the verified chain atomically with the money movement, so an approved transaction
+    // always has a queryable Intent to Cart to Payment record, and the transaction points at the
+    // payment mandate it was authorized by.
+    const { paymentMandateId } = await persistMandateChain(
+      client,
+      req.mandates,
+      verification,
+      req.agentId,
+    );
+    const transactionId = await insertApprovedTransaction(client, req, paymentMandateId);
     await insertLedgerEntries(client, transactionId, req.amountCents);
     await client.query("COMMIT");
     return { status: "approved", transactionId };
@@ -159,21 +198,71 @@ function rejectionReason(budgets: BudgetRow[], amountCents: bigint): string | nu
   return null;
 }
 
-async function insertTransaction(
+async function insertApprovedTransaction(
   client: PoolClient,
   req: PurchaseRequest,
-  status: "approved" | "blocked",
-  reason: string | null,
+  paymentMandateId: string,
 ): Promise<string> {
-  // Phase 1 has no mandate yet, so payment_mandate_id is a generated placeholder. Phase 2 will
-  // pass the verified payment mandate's id here; the column stays NOT NULL so the shape holds.
   const { rows } = await client.query<{ id: string }>(
     `INSERT INTO transactions (payment_mandate_id, amount_cents, category, vendor, status, reason)
-     VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
+     VALUES ($1, $2, $3, $4, 'approved', NULL)
      RETURNING id`,
-    [req.amountCents.toString(), req.category, req.vendor, status, reason],
+    [paymentMandateId, req.amountCents.toString(), req.category, req.vendor],
   );
   return rows[0].id;
+}
+
+async function insertBlockedTransaction(
+  client: PoolClient,
+  req: PurchaseRequest,
+  reason: string,
+): Promise<string> {
+  // A blocked attempt persists no mandate chain, so payment_mandate_id is a generated
+  // placeholder. The reason records which gate, mandate or budget, stopped the purchase.
+  const { rows } = await client.query<{ id: string }>(
+    `INSERT INTO transactions (payment_mandate_id, amount_cents, category, vendor, status, reason)
+     VALUES (gen_random_uuid(), $1, $2, $3, 'blocked', $4)
+     RETURNING id`,
+    [req.amountCents.toString(), req.category, req.vendor, reason],
+  );
+  return rows[0].id;
+}
+
+// Insert the three mandate rows linked payment to cart to intent, storing each content hash,
+// signature, and the content as scope JSON. I generate the ids here so all three rows and their
+// parent links go in one round trip instead of three RETURNING calls. DSQL has no foreign keys,
+// so a row may reference a sibling id created in the same statement.
+async function persistMandateChain(
+  client: PoolClient,
+  bundle: MandateBundle,
+  hashes: { intentHash: string; cartHash: string; paymentHash: string },
+  agentId: string,
+): Promise<{ paymentMandateId: string }> {
+  const intentId = randomUUID();
+  const cartId = randomUUID();
+  const paymentId = randomUUID();
+  await client.query(
+    `INSERT INTO mandates (id, agent_id, type, parent_mandate_id, scope, content_hash, signature, status)
+     VALUES ($1,  $2, 'intent',  NULL, $3::jsonb,  $4,  $5,  'verified'),
+            ($6,  $2, 'cart',     $1,   $7::jsonb,  $8,  $9,  'verified'),
+            ($10, $2, 'payment',  $6,   $11::jsonb, $12, $13, 'verified')`,
+    [
+      intentId,
+      agentId,
+      JSON.stringify(bundle.intent.content),
+      hashes.intentHash,
+      bundle.intent.signature,
+      cartId,
+      JSON.stringify(bundle.cart.content),
+      hashes.cartHash,
+      bundle.cart.signature,
+      paymentId,
+      JSON.stringify(bundle.payment.content),
+      hashes.paymentHash,
+      bundle.payment.signature,
+    ],
+  );
+  return { paymentMandateId: paymentId };
 }
 
 // Two balanced rows per approved purchase: a debit to expense and a credit to budget, both for

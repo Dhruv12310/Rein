@@ -9,6 +9,7 @@ import {
   remainingCents,
   sumCents,
 } from "./helpers";
+import { makeActors, validBundle } from "./mandate-fixtures";
 
 afterAll(async () => {
   await closePool();
@@ -17,9 +18,11 @@ afterAll(async () => {
 test("load: N concurrent purchases against a budget that allows exactly K", async () => {
   const period = currentPeriod();
   const agentId = await createAgent();
+  const actors = makeActors(agentId);
   const n = 10;
   const k = 4;
   const amount = 5_000n;
+  const buy = { amountCents: amount, category: "saas", vendor: "Acme" };
   // Room for exactly K purchases of this amount, so N minus K must be blocked.
   const budgetId = await createBudget({
     agentId,
@@ -34,10 +37,10 @@ test("load: N concurrent purchases against a budget that allows exactly K", asyn
     // and rejects cleanly with no further conflict. So K plus a small margin as the attempt cap
     // never exhausts retries here, which would otherwise be a false failure.
     const maxAttempts = k + 8;
-    const requests = Array.from({ length: n }, (_, index) =>
+    const requests = Array.from({ length: n }, () =>
       purchase(
-        { agentId, amountCents: amount, category: "saas", vendor: `vendor-${index}` },
-        { maxAttempts },
+        { agentId, ...buy, mandates: validBundle(actors, buy) },
+        { maxAttempts, resolveKey: actors.resolveKey },
       ),
     );
 
@@ -80,22 +83,26 @@ test("load: N concurrent purchases against a budget that allows exactly K", asyn
 test("perf: single purchase latency against the live cluster, warm", async () => {
   const period = currentPeriod();
   const agentId = await createAgent();
+  const actors = makeActors(agentId);
   const budgetId = await createBudget({ agentId, period, category: null, limitCents: 10_000_000n });
   const transactionIds: string[] = [];
   try {
     // Warm the pool first so the one-time token mint and TLS handshake do not skew the sample.
-    const warm = await purchase({ agentId, amountCents: 1n, category: "saas", vendor: "warmup" });
+    const warmBuy = { amountCents: 1n, category: "saas", vendor: "warmup" };
+    const warm = await purchase(
+      { agentId, ...warmBuy, mandates: validBundle(actors, warmBuy) },
+      { resolveKey: actors.resolveKey },
+    );
     transactionIds.push(warm.transactionId);
 
     const samples: number[] = [];
+    const buy = { amountCents: 100n, category: "saas", vendor: "perf" };
     for (let i = 0; i < 5; i++) {
       const started = performance.now();
-      const decision = await purchase({
-        agentId,
-        amountCents: 100n,
-        category: "saas",
-        vendor: "perf",
-      });
+      const decision = await purchase(
+        { agentId, ...buy, mandates: validBundle(actors, buy) },
+        { resolveKey: actors.resolveKey },
+      );
       samples.push(performance.now() - started);
       transactionIds.push(decision.transactionId);
     }

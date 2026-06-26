@@ -11,24 +11,34 @@ import {
   sumCents,
   transactionRow,
 } from "./helpers";
+import { makeActors, validBundle } from "./mandate-fixtures";
 
 afterAll(async () => {
   await closePool();
 });
 
+// These exercise the budget gate. Every purchase carries a valid mandate chain so it clears the
+// mandate gate, which keeps the focus on the Phase 1 budget math. Phase 2 mandate rejections
+// have their own tests.
+
 describe("purchase, single transaction decisions", () => {
   test("approves a purchase that fits and writes two balanced ledger entries", async () => {
     const period = currentPeriod();
     const agentId = await createAgent();
+    const actors = makeActors(agentId);
     const budgetId = await createBudget({ agentId, period, category: null, limitCents: 10_000n });
     const transactionIds: string[] = [];
     try {
-      const decision = await purchase({
-        agentId,
-        amountCents: 2_500n,
-        category: "saas",
-        vendor: "Acme",
-      });
+      const decision = await purchase(
+        {
+          agentId,
+          amountCents: 2_500n,
+          category: "saas",
+          vendor: "Acme",
+          mandates: validBundle(actors, { amountCents: 2_500n, category: "saas", vendor: "Acme" }),
+        },
+        { resolveKey: actors.resolveKey },
+      );
       transactionIds.push(decision.transactionId);
 
       expect(decision.status).toBe("approved");
@@ -55,15 +65,20 @@ describe("purchase, single transaction decisions", () => {
   test("blocks an over-budget purchase, records it, and leaves the budget untouched", async () => {
     const period = currentPeriod();
     const agentId = await createAgent();
+    const actors = makeActors(agentId);
     const budgetId = await createBudget({ agentId, period, category: null, limitCents: 1_000n });
     const transactionIds: string[] = [];
     try {
-      const decision = await purchase({
-        agentId,
-        amountCents: 5_000n,
-        category: "saas",
-        vendor: "Acme",
-      });
+      const decision = await purchase(
+        {
+          agentId,
+          amountCents: 5_000n,
+          category: "saas",
+          vendor: "Acme",
+          mandates: validBundle(actors, { amountCents: 5_000n, category: "saas", vendor: "Acme" }),
+        },
+        { resolveKey: actors.resolveKey },
+      );
       transactionIds.push(decision.transactionId);
 
       expect(decision.status).toBe("blocked");
@@ -81,6 +96,7 @@ describe("purchase, single transaction decisions", () => {
   test("blocks a purchase in a category with no room even when another category has room", async () => {
     const period = currentPeriod();
     const agentId = await createAgent();
+    const actors = makeActors(agentId);
     const saasBudget = await createBudget({
       agentId,
       period,
@@ -96,12 +112,16 @@ describe("purchase, single transaction decisions", () => {
     });
     const transactionIds: string[] = [];
     try {
-      const decision = await purchase({
-        agentId,
-        amountCents: 1_000n,
-        category: "saas",
-        vendor: "Acme",
-      });
+      const decision = await purchase(
+        {
+          agentId,
+          amountCents: 1_000n,
+          category: "saas",
+          vendor: "Acme",
+          mandates: validBundle(actors, { amountCents: 1_000n, category: "saas", vendor: "Acme" }),
+        },
+        { resolveKey: actors.resolveKey },
+      );
       transactionIds.push(decision.transactionId);
 
       expect(decision.status).toBe("blocked");
@@ -116,6 +136,7 @@ describe("purchase, single transaction decisions", () => {
   test("blocks a purchase when no budget applies to its category", async () => {
     const period = currentPeriod();
     const agentId = await createAgent();
+    const actors = makeActors(agentId);
     const cloudBudget = await createBudget({
       agentId,
       period,
@@ -124,12 +145,16 @@ describe("purchase, single transaction decisions", () => {
     });
     const transactionIds: string[] = [];
     try {
-      const decision = await purchase({
-        agentId,
-        amountCents: 1_000n,
-        category: "saas",
-        vendor: "Acme",
-      });
+      const decision = await purchase(
+        {
+          agentId,
+          amountCents: 1_000n,
+          category: "saas",
+          vendor: "Acme",
+          mandates: validBundle(actors, { amountCents: 1_000n, category: "saas", vendor: "Acme" }),
+        },
+        { resolveKey: actors.resolveKey },
+      );
       transactionIds.push(decision.transactionId);
 
       expect(decision.status).toBe("blocked");
@@ -147,9 +172,11 @@ describe("purchase, the concurrency guarantee", () => {
   test("two concurrent purchases on one budget: exactly one commits, the loser is blocked", async () => {
     const period = currentPeriod();
     const agentId = await createAgent();
+    const actors = makeActors(agentId);
     // Overall cap that fits either purchase alone but not both together.
     const budgetId = await createBudget({ agentId, period, category: null, limitCents: 10_000n });
     const amount = 6_000n;
+    const buy = { amountCents: amount, category: "saas", vendor: "Acme" };
     const transactionIds: string[] = [];
     try {
       // Hold both transactions after they have read room, then release them into the budget
@@ -157,12 +184,12 @@ describe("purchase, the concurrency guarantee", () => {
       const barrier = makeBarrier(2);
       const [first, second] = await Promise.all([
         purchase(
-          { agentId, amountCents: amount, category: "saas", vendor: "Acme" },
-          { afterRead: barrier },
+          { agentId, ...buy, mandates: validBundle(actors, buy) },
+          { afterRead: barrier, resolveKey: actors.resolveKey },
         ),
         purchase(
-          { agentId, amountCents: amount, category: "saas", vendor: "Acme" },
-          { afterRead: barrier },
+          { agentId, ...buy, mandates: validBundle(actors, buy) },
+          { afterRead: barrier, resolveKey: actors.resolveKey },
         ),
       ]);
       transactionIds.push(first.transactionId, second.transactionId);
