@@ -33,6 +33,7 @@ export function OverviewHero({
   stale?: boolean;
 }) {
   const pct = Math.round(spendRatio(stats.totalSpentCents, stats.totalLimitCents) * 100);
+  const hasActivity = stats.decisions.total > 0;
   const clean = stats.overspentBudgets === 0;
 
   return (
@@ -64,13 +65,17 @@ export function OverviewHero({
           <div>
             <SectionLabel>Budgets overspent</SectionLabel>
             <div
-              className={`mt-2 flex items-center gap-2 text-3xl font-semibold tnum ${clean ? "text-ok" : "text-danger"}`}
+              className={`mt-2 flex items-center gap-2 text-3xl font-semibold tnum ${!hasActivity ? "text-muted" : clean ? "text-ok" : "text-danger"}`}
             >
-              {clean ? <Check /> : null}
+              {hasActivity && clean ? <Check /> : null}
               {stats.overspentBudgets}
             </div>
             <div className="mt-1 text-xs text-faint">
-              {clean ? "never, under every race" : "investigate immediately"}
+              {!hasActivity
+                ? "no decisions yet"
+                : clean
+                  ? "never, under every race"
+                  : "investigate immediately"}
             </div>
           </div>
         </Card>

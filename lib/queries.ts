@@ -4,6 +4,11 @@ import { getPool } from "./db";
 // reads back from pg as a string and the API never turns it into a float. Timestamps come back
 // as Date and the serialization boundary turns them into ISO strings.
 
+// The demo scenarios create throwaway agents under this name prefix. They are test fixtures, so
+// the management views (live spend, budget config) exclude them and show only the agents a finance
+// team actually manages. The audit feed and the integrity counters still cover everything.
+const DEMO_AGENT_PREFIX = "demo: %";
+
 export type BudgetSpend = {
   id: string;
   category: string | null;
@@ -39,8 +44,9 @@ export async function spendSummary(period: string): Promise<AgentSpend[]> {
             (b.limit_cents - b.remaining_cents) AS spent_cents
        FROM agents a
        LEFT JOIN budgets b ON b.agent_id = a.id AND b.period = $1
+      WHERE a.name NOT LIKE $2
       ORDER BY a.name ASC`,
-    [period],
+    [period, DEMO_AGENT_PREFIX],
   );
 
   const byAgent = new Map<string, AgentSpend>();
@@ -73,39 +79,60 @@ export async function spendSummary(period: string): Promise<AgentSpend[]> {
   return agents;
 }
 
-export type OverviewStats = {
+export type SpendTotals = {
   totalLimitCents: string;
   totalSpentCents: string;
   totalRemainingCents: string;
   budgetCount: number;
+};
+
+// Roll the per-agent budgets up to one set of headline totals without double counting. An overall
+// cap and its category budgets overlap, because a purchase decrements both, so a flat sum over all
+// rows would count the same money twice. For each agent the overall cap already contains every
+// category, so when one exists it is the agent's true ceiling and the categories are folded into
+// it. Only an agent with no overall cap sums its category rows, which never overlap. Computed from
+// the same rows the cards show, so the headline and the breakdown can never disagree.
+export function aggregateSpend(agents: AgentSpend[]): SpendTotals {
+  let limit = 0n;
+  let remaining = 0n;
+  let budgetCount = 0;
+  for (const agent of agents) {
+    budgetCount += agent.budgets.length;
+    const cap = agent.budgets.find((b) => b.category === null);
+    const counted = cap ? [cap] : agent.budgets;
+    for (const budget of counted) {
+      limit += BigInt(budget.limitCents);
+      remaining += BigInt(budget.remainingCents);
+    }
+  }
+  return {
+    totalLimitCents: limit.toString(),
+    totalRemainingCents: remaining.toString(),
+    totalSpentCents: (limit - remaining).toString(),
+    budgetCount,
+  };
+}
+
+export type IntegrityStats = {
   overspentBudgets: number; // the live invariant: a budget whose remaining went below zero, always 0
   decisions: { approved: number; blocked: number; total: number };
 };
 
-// The numbers the Overview hero reads: the totals across budgets for the period, and the count of
-// budgets that ever went negative, which is the visible proof of the no-overspend guarantee. The
-// decision counts come from every recorded transaction, approved and blocked.
-export async function overviewStats(period: string): Promise<OverviewStats> {
-  const totals = await getPool().query<{
-    limit_cents: string | null;
-    remaining_cents: string | null;
-    budget_count: string;
-    overspent: string;
-  }>(
-    `SELECT COALESCE(SUM(limit_cents), 0)::text AS limit_cents,
-            COALESCE(SUM(remaining_cents), 0)::text AS remaining_cents,
-            COUNT(*) AS budget_count,
-            COUNT(*) FILTER (WHERE remaining_cents < 0) AS overspent
-       FROM budgets WHERE period = $1`,
-    [period],
+// The proof counters behind the hero. overspentBudgets is the count of managed budgets that ever
+// went negative, which is the visible no-overspend guarantee. The decision counts come from every
+// recorded transaction, approved and blocked, so they read as a running total of all enforcement.
+export async function integrityStats(period: string): Promise<IntegrityStats> {
+  const overspent = await getPool().query<{ overspent: string }>(
+    `SELECT COUNT(*) FILTER (WHERE b.remaining_cents < 0) AS overspent
+       FROM budgets b
+       JOIN agents a ON a.id = b.agent_id
+      WHERE b.period = $1 AND a.name NOT LIKE $2`,
+    [period, DEMO_AGENT_PREFIX],
   );
   const decisions = await getPool().query<{ status: string; c: string }>(
     "SELECT status, COUNT(*) AS c FROM transactions GROUP BY status",
   );
 
-  const row = totals.rows[0];
-  const limit = BigInt(row.limit_cents ?? "0");
-  const remaining = BigInt(row.remaining_cents ?? "0");
   let approved = 0;
   let blocked = 0;
   for (const d of decisions.rows) {
@@ -113,11 +140,7 @@ export async function overviewStats(period: string): Promise<OverviewStats> {
     if (d.status === "blocked") blocked = Number(d.c);
   }
   return {
-    totalLimitCents: limit.toString(),
-    totalSpentCents: (limit - remaining).toString(),
-    totalRemainingCents: remaining.toString(),
-    budgetCount: Number(row.budget_count),
-    overspentBudgets: Number(row.overspent),
+    overspentBudgets: Number(overspent.rows[0]?.overspent ?? "0"),
     decisions: { approved, blocked, total: approved + blocked },
   };
 }
@@ -126,7 +149,8 @@ export type AgentRow = { id: string; name: string; status: string };
 
 export async function listAgents(): Promise<AgentRow[]> {
   const { rows } = await getPool().query<AgentRow>(
-    "SELECT id, name, status FROM agents ORDER BY name ASC",
+    "SELECT id, name, status FROM agents WHERE name NOT LIKE $1 ORDER BY name ASC",
+    [DEMO_AGENT_PREFIX],
   );
   return rows;
 }

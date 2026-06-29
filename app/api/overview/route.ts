@@ -1,17 +1,21 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { currentPeriod } from "@/lib/purchase";
-import { overviewStats, spendSummary } from "@/lib/queries";
+import { aggregateSpend, integrityStats, spendSummary } from "@/lib/queries";
 import { toJsonSafe } from "@/lib/serialize";
 
-// One poll for the whole Overview: the per-agent spend plus the header totals and the live
-// no-overspend proof, so the hero and the breakdown stay consistent and the page makes one request.
+// One poll for the whole Overview: the per-agent spend, the headline totals derived from those same
+// rows so the hero and the breakdown agree, and the live no-overspend proof counters.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
     const period = request.nextUrl.searchParams.get("period") ?? currentPeriod();
-    const [agents, stats] = await Promise.all([spendSummary(period), overviewStats(period)]);
+    const [agents, integrity] = await Promise.all([
+      spendSummary(period),
+      integrityStats(period),
+    ]);
+    const stats = { ...aggregateSpend(agents), ...integrity };
     return NextResponse.json(toJsonSafe({ period, stats, agents }));
   } catch (err) {
     console.error("GET /api/overview failed", err);

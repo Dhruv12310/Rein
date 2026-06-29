@@ -4,6 +4,9 @@ import { toJsonSafe } from "@/lib/serialize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// The concurrent scenarios fire two purchases and may retry on a conflict, so give this route
+// more than the default function budget on Vercel.
+export const maxDuration = 30;
 
 export async function POST(request: NextRequest) {
   let body: unknown;
