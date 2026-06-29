@@ -43,10 +43,13 @@ function backoffDelay(attempt: number): number {
 }
 
 // Create or update a budget. The deterministic id makes this an upsert on the primary key. A new
-// budget starts with its full limit remaining; re-setting an existing one changes the limit and
-// shifts remaining by the same delta, so already-recorded spend is preserved. A concurrent
-// double-set collides at COMMIT with 40001, which is retried, and the retry sees the committed
-// row through ON CONFLICT and updates it, so the pair resolves to exactly one row.
+// budget starts with its full limit remaining; re-setting an existing one shifts remaining by the
+// limit delta, so already-recorded spend is preserved. Money that is already spent cannot be
+// un-spent, so a limit cannot be lowered below the current spend: the new limit floors at the
+// spent amount and remaining floors at zero, which keeps remaining non-negative and the identity
+// spent equals limit minus remaining true. A concurrent double-set collides at COMMIT with 40001,
+// which is retried, and the retry sees the committed row through ON CONFLICT, so the pair resolves
+// to exactly one row.
 export async function setBudget(
   params: { agentId: string; period: string; category: string | null; limitCents: bigint },
   maxAttempts = 6,
@@ -61,8 +64,8 @@ export async function setBudget(
         `INSERT INTO budgets (id, agent_id, period, category, limit_cents, remaining_cents)
          VALUES ($1, $2, $3, $4, $5, $5)
          ON CONFLICT (id) DO UPDATE SET
-           remaining_cents = budgets.remaining_cents + (EXCLUDED.limit_cents - budgets.limit_cents),
-           limit_cents = EXCLUDED.limit_cents,
+           limit_cents = GREATEST(EXCLUDED.limit_cents, budgets.limit_cents - budgets.remaining_cents),
+           remaining_cents = GREATEST(0, budgets.remaining_cents + (EXCLUDED.limit_cents - budgets.limit_cents)),
            updated_at = now()
          RETURNING id, agent_id, period, category, limit_cents, remaining_cents`,
         [id, params.agentId, params.period, params.category, limit],

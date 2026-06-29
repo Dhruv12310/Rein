@@ -52,6 +52,25 @@ test("a concurrent double-set of the same budget resolves to exactly one row", a
   }
 });
 
+test("a limit cannot be lowered below current spend; remaining floors at zero and stays consistent", async () => {
+  const agentId = randomUUID();
+  const period = "2026-06";
+  try {
+    const created = await setBudget({ agentId, period, category: "data", limitCents: 200_000n });
+    // Simulate 150000 already spent by drawing remaining down directly.
+    await getPool().query("UPDATE budgets SET remaining_cents = 50000 WHERE id = $1", [created.id]);
+    // Try to lower the limit to 100000, below the 150000 already spent.
+    const updated = await setBudget({ agentId, period, category: "data", limitCents: 100_000n });
+    // The limit floors at the spent amount and remaining floors at zero, never negative.
+    expect(updated.remaining_cents).toBe("0");
+    expect(updated.limit_cents).toBe("150000");
+    // The identity holds: spent equals limit minus remaining.
+    expect(BigInt(updated.limit_cents) - BigInt(updated.remaining_cents)).toBe(150_000n);
+  } finally {
+    await removeBudgets(agentId);
+  }
+});
+
 test("budgetId is deterministic and keeps a null overall cap distinct from an empty category", () => {
   const agentId = "agent-x";
   expect(budgetId(agentId, "2026-06", "cloud")).toBe(budgetId(agentId, "2026-06", "cloud"));
