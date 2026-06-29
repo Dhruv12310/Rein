@@ -34,6 +34,9 @@ export function describeReason(status: string, reason: string | null): Described
   if (reason === "payment_already_redeemed") {
     return { label: "Already charged", group: "replay", machine: reason };
   }
+  if (reason === "agent_revoked") {
+    return { label: "Agent revoked", group: "mandate", machine: reason };
+  }
   if (MANDATE_LABELS[reason]) {
     return { label: MANDATE_LABELS[reason], group: "mandate", machine: reason };
   }

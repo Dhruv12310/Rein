@@ -16,7 +16,9 @@ export const DEMO_SCENARIOS = [
   "wrong-category",
   "over-budget",
   "race",
+  "shared-cap",
   "replay",
+  "kill-switch",
   "tampered",
 ] as const;
 export type DemoScenario = (typeof DEMO_SCENARIOS)[number];
@@ -101,11 +103,12 @@ async function seedDemoBudget(
   category: string | null,
   limitCents: bigint,
   remainingCents: bigint,
+  parentBudgetId: string | null = null,
 ): Promise<string> {
   const { rows } = await getPool().query<{ id: string }>(
-    `INSERT INTO budgets (agent_id, period, category, limit_cents, remaining_cents)
-     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [agentId, period, category, limitCents.toString(), remainingCents.toString()],
+    `INSERT INTO budgets (agent_id, period, category, limit_cents, remaining_cents, parent_budget_id)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [agentId, period, category, limitCents.toString(), remainingCents.toString(), parentBudgetId],
   );
   return rows[0].id;
 }
@@ -375,6 +378,90 @@ async function scenarioTampered(): Promise<DemoRunResult> {
   };
 }
 
+// A shared team cap with two worker agents rolling up to it. Each worker has its own budget, but
+// both purchases also decrement the one team budget, so they collide on that shared row. This is
+// the hierarchy version of the race: different agents, different category budgets, one ceiling, and
+// DSQL still lets exactly one commit.
+async function scenarioSharedCap(): Promise<DemoRunResult> {
+  const period = currentPeriod();
+  const team = await createDemoAgent("Platform team");
+  const teamBudgetId = await seedDemoBudget(team.agentId, period, null, 100_000n, 100_000n);
+  const amount = 60_000n;
+
+  const workerOne = await createDemoAgent("Worker one");
+  const workerTwo = await createDemoAgent("Worker two");
+  // Each worker's own budget is generous; the binding limit is the shared team cap above them.
+  await seedDemoBudget(workerOne.agentId, period, "cloud", 100_000n, 100_000n, teamBudgetId);
+  await seedDemoBudget(workerTwo.agentId, period, "cloud", 100_000n, 100_000n, teamBudgetId);
+
+  const buyOne: Buy = { amountCents: amount, category: "cloud", vendor: "Acme Cloud" };
+  const buyTwo: Buy = { amountCents: amount, category: "cloud", vendor: "Globex Compute" };
+  const barrier = makeBarrier(2);
+  const [a, b] = await Promise.all([
+    runDemoPurchase(workerOne, buyOne, demoBundle(workerOne, buyOne), barrier),
+    runDemoPurchase(workerTwo, buyTwo, demoBundle(workerTwo, buyTwo), barrier),
+  ]);
+
+  const approved = [a, b].filter((decision) => decision.status === "approved");
+  const blocked = [a, b].filter((decision) => decision.status === "blocked");
+  const loser = blocked[0];
+  const loserRetries = loser ? loser.retries : 0;
+  const after = await budgetSpent(teamBudgetId);
+  const balanced = await ledgerBalanced([a.transactionId, b.transactionId]);
+
+  return {
+    scenario: "shared-cap",
+    title: "Shared team cap race",
+    status: "approved",
+    summary:
+      "Two different agents under one team budget bought at the same instant. Each fit its own budget, but they share the team ceiling, so DSQL committed one and rejected the other at commit. The team cap moved exactly once.",
+    machineReason: loser && loser.status === "blocked" ? loser.reason : null,
+    transactionId: approved[0]?.transactionId ?? null,
+    spendBeforeCents: "0",
+    spendAfterCents: after.spent.toString(),
+    race: {
+      approvedCount: approved.length,
+      blockedCount: blocked.length,
+      limitCents: "100000",
+      amountCents: amount.toString(),
+      finalRemainingCents: after.remaining.toString(),
+      loserRetries,
+      conflictObserved: loserRetries > 0,
+      booksBalanced: balanced,
+    },
+  };
+}
+
+// Approve a purchase, revoke the agent, then submit a fresh valid mandate. The revocation takes
+// effect on the very next decision.
+async function scenarioKillSwitch(): Promise<DemoRunResult> {
+  const period = currentPeriod();
+  const actors = await createDemoAgent("Kill-switch run");
+  const budgetId = await seedDemoBudget(actors.agentId, period, null, 200_000n, 200_000n);
+  const buy: Buy = { amountCents: 30_000n, category: "saas", vendor: "Initech" };
+
+  await runDemoPurchase(actors, buy, demoBundle(actors, buy)); // approved while active
+  await getPool().query("UPDATE agents SET status = 'revoked' WHERE id = $1", [actors.agentId]);
+
+  const before = await budgetSpent(budgetId);
+  // A new, fully valid mandate, so nothing but the revocation can block it.
+  const second = await runDemoPurchase(actors, buy, demoBundle(actors, buy));
+  const after = await budgetSpent(budgetId);
+
+  return {
+    scenario: "kill-switch",
+    title: "Instant kill-switch",
+    status: second.status,
+    summary:
+      "The agent was approved, then revoked. Its next purchase carried a valid signed mandate and still had budget, but the revocation stopped it at the very next decision, before any money moved.",
+    machineReason: second.status === "blocked" ? second.reason : null,
+    transactionId: second.transactionId,
+    spendBeforeCents: before.spent.toString(),
+    spendAfterCents: after.spent.toString(),
+    race: null,
+  };
+}
+
 export async function runDemoScenario(scenario: DemoScenario): Promise<DemoRunResult> {
   switch (scenario) {
     case "approved":
@@ -385,8 +472,12 @@ export async function runDemoScenario(scenario: DemoScenario): Promise<DemoRunRe
       return scenarioOverBudget();
     case "race":
       return scenarioRace();
+    case "shared-cap":
+      return scenarioSharedCap();
     case "replay":
       return scenarioReplay();
+    case "kill-switch":
+      return scenarioKillSwitch();
     case "tampered":
       return scenarioTampered();
   }

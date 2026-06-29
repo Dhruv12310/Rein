@@ -73,6 +73,55 @@ export async function spendSummary(period: string): Promise<AgentSpend[]> {
   return agents;
 }
 
+export type OverviewStats = {
+  totalLimitCents: string;
+  totalSpentCents: string;
+  totalRemainingCents: string;
+  budgetCount: number;
+  overspentBudgets: number; // the live invariant: a budget whose remaining went below zero, always 0
+  decisions: { approved: number; blocked: number; total: number };
+};
+
+// The numbers the Overview hero reads: the totals across budgets for the period, and the count of
+// budgets that ever went negative, which is the visible proof of the no-overspend guarantee. The
+// decision counts come from every recorded transaction, approved and blocked.
+export async function overviewStats(period: string): Promise<OverviewStats> {
+  const totals = await getPool().query<{
+    limit_cents: string | null;
+    remaining_cents: string | null;
+    budget_count: string;
+    overspent: string;
+  }>(
+    `SELECT COALESCE(SUM(limit_cents), 0)::text AS limit_cents,
+            COALESCE(SUM(remaining_cents), 0)::text AS remaining_cents,
+            COUNT(*) AS budget_count,
+            COUNT(*) FILTER (WHERE remaining_cents < 0) AS overspent
+       FROM budgets WHERE period = $1`,
+    [period],
+  );
+  const decisions = await getPool().query<{ status: string; c: string }>(
+    "SELECT status, COUNT(*) AS c FROM transactions GROUP BY status",
+  );
+
+  const row = totals.rows[0];
+  const limit = BigInt(row.limit_cents ?? "0");
+  const remaining = BigInt(row.remaining_cents ?? "0");
+  let approved = 0;
+  let blocked = 0;
+  for (const d of decisions.rows) {
+    if (d.status === "approved") approved = Number(d.c);
+    if (d.status === "blocked") blocked = Number(d.c);
+  }
+  return {
+    totalLimitCents: limit.toString(),
+    totalSpentCents: (limit - remaining).toString(),
+    totalRemainingCents: remaining.toString(),
+    budgetCount: Number(row.budget_count),
+    overspentBudgets: Number(row.overspent),
+    decisions: { approved, blocked, total: approved + blocked },
+  };
+}
+
 export type AgentRow = { id: string; name: string; status: string };
 
 export async function listAgents(): Promise<AgentRow[]> {

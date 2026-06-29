@@ -47,7 +47,12 @@ export function currentPeriod(date: Date = new Date()): string {
   return `${year}-${month}`;
 }
 
-type BudgetRow = { id: string; category: string | null; remaining_cents: string };
+type BudgetRow = {
+  id: string;
+  category: string | null;
+  remaining_cents: string;
+  parent_budget_id: string | null;
+};
 
 export async function purchase(
   req: PurchaseRequest,
@@ -120,6 +125,15 @@ async function runPurchaseTxn(
       const transactionId = await insertBlockedTransaction(client, req, verification.reason);
       await client.query("COMMIT");
       return { status: "blocked", transactionId, reason: verification.reason };
+    }
+
+    // Kill-switch. The agent's status is read inside this transaction, so a revocation committed in
+    // any region stops the agent on its very next decision with no propagation window. A revoked or
+    // unknown agent is blocked here, before any budget is read or money is touched.
+    if (!(await agentIsActive(client, req.agentId))) {
+      const transactionId = await insertBlockedTransaction(client, req, "agent_revoked");
+      await client.query("COMMIT");
+      return { status: "blocked", transactionId, reason: "agent_revoked" };
     }
 
     const budgets = await readApplicableBudgets(client, req, period);
@@ -204,20 +218,60 @@ async function runPurchaseTxn(
   }
 }
 
+// An agent may transact only while active. Reading status inside the purchase transaction keeps
+// the kill-switch strongly consistent: there is no cache or replica lag between a revoke and the
+// next decision.
+async function agentIsActive(client: PoolClient, agentId: string): Promise<boolean> {
+  const { rows } = await client.query<{ status: string }>(
+    "SELECT status FROM agents WHERE id = $1",
+    [agentId],
+  );
+  return rows[0]?.status === "active";
+}
+
 // Budgets that apply to this purchase: same agent and period, and either the overall cap
-// (category is null) or the budget for this exact category. A purchase must fit every one.
+// (category is null) or the budget for this exact category, plus every ancestor cap those roll up
+// to. A purchase must fit and decrement all of them. Including ancestors here is what makes a
+// shared parent cap a single contended row: two agents under one team budget both update it and
+// collide, exactly the optimistic-concurrency guarantee the per-agent budget already relies on.
 async function readApplicableBudgets(
   client: PoolClient,
   req: PurchaseRequest,
   period: string,
 ): Promise<BudgetRow[]> {
   const { rows } = await client.query<BudgetRow>(
-    `SELECT id, category, remaining_cents
+    `SELECT id, category, remaining_cents, parent_budget_id
        FROM budgets
       WHERE agent_id = $1 AND period = $2 AND (category IS NULL OR category = $3)`,
     [req.agentId, period, req.category],
   );
-  return rows;
+
+  const collected = new Map<string, BudgetRow>();
+  for (const row of rows) {
+    collected.set(row.id, row);
+  }
+  // Walk up the parent chain, fetching each level once. Depth is the budget tree height (a few
+  // levels), so this is a small bounded number of reads on the same connection.
+  let frontier = rows
+    .map((row) => row.parent_budget_id)
+    .filter((id): id is string => id !== null && !collected.has(id));
+  while (frontier.length > 0) {
+    const { rows: parents } = await client.query<BudgetRow>(
+      "SELECT id, category, remaining_cents, parent_budget_id FROM budgets WHERE id = ANY($1::uuid[])",
+      [frontier],
+    );
+    const next: string[] = [];
+    for (const parent of parents) {
+      if (!collected.has(parent.id)) {
+        collected.set(parent.id, parent);
+        if (parent.parent_budget_id && !collected.has(parent.parent_budget_id)) {
+          next.push(parent.parent_budget_id);
+        }
+      }
+    }
+    frontier = next;
+  }
+  return [...collected.values()];
 }
 
 // Returns a short reason when the purchase cannot be approved, or null when it fits everywhere.

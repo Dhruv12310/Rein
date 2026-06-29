@@ -5,7 +5,9 @@ export type DemoScenario =
   | "wrong-category"
   | "over-budget"
   | "race"
+  | "shared-cap"
   | "replay"
+  | "kill-switch"
   | "tampered";
 
 export type DemoRaceResult = {

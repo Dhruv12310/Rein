@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { GeistMono } from "geist/font/mono";
+import { GeistSans } from "geist/font/sans";
 import { Nav } from "@/components/nav";
 import "./globals.css";
 
@@ -13,8 +15,12 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Geist ships as local font files, so the variable fonts load with no build-time network fetch.
   return (
-    <html lang="en" className="h-full antialiased">
+    <html
+      lang="en"
+      className={`h-full antialiased ${GeistSans.variable} ${GeistMono.variable}`}
+    >
       <body className="min-h-full">
         <Nav />
         <main className="mx-auto max-w-5xl px-5 py-10">{children}</main>

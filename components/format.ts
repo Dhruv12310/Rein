@@ -6,7 +6,8 @@ export function formatCents(cents: string): string {
   const dollars = digits.slice(0, -2);
   const fraction = digits.slice(-2);
   const grouped = dollars.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `${negative ? "-" : ""}$${grouped}.${fraction}`;
+  // A real minus sign (U+2212), not a hyphen, so negatives align in a money column.
+  return `${negative ? "−" : ""}$${grouped}.${fraction}`;
 }
 
 // Fraction of a budget that is spent, clamped to the bar's range. Used only for the fill width

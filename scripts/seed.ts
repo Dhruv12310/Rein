@@ -12,7 +12,15 @@ import { buildMandateChain, generateKeyPair } from "../lib/signing";
 // scenarios come later. Vendor names are fictional to keep the data free of real brands.
 loadEnvConfig(process.cwd());
 
-const TABLES = ["redeemed_payments", "ledger_entries", "mandates", "transactions", "budgets", "agents"];
+const TABLES = [
+  "demo_transactions",
+  "redeemed_payments",
+  "ledger_entries",
+  "mandates",
+  "transactions",
+  "budgets",
+  "agents",
+];
 
 // Clear prior demo data so a re-run gives a clean, consistent slate. The seed keeps every table
 // small, so this stays well under DSQL's per-transaction row limit.

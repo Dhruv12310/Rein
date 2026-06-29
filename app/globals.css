@@ -1,38 +1,40 @@
 @import "tailwindcss";
 
-/* Rein's visual identity. A calm financial-control surface: a warm paper canvas, graphite ink,
-   one deep slate-navy brand used sparingly, and muted semantic colors held back for the two
+/* Rein's visual identity, an engineered control plane. Near-black graphite canvas, one electric
+   accent used only for brand, live, and action, and muted semantic color reserved for the two
    things that carry meaning here, budget health and which gate blocked a purchase. Hairline
-   borders instead of heavy shadows, tabular figures so money lines up in columns. */
+   borders over heavy shadows, lining tabular figures so money locks into columns, a monospace
+   reserved for hashes, signatures, and the 40001 code so cryptographic material reads as
+   evidence. The whole app reskins from this token block because every component consumes it. */
 @theme {
-  --color-canvas: #f6f5f3;
-  --color-surface: #ffffff;
-  --color-raised: #fbfbfa;
-  --color-ink: #1a1a1c;
-  --color-muted: #6b6b72;
-  --color-faint: #6e6e75;
-  --color-line: #e7e4df;
+  --color-canvas: #0c0c0e;
+  --color-surface: #141417;
+  --color-raised: #1c1c21;
+  --color-ink: #ededf1;
+  --color-muted: #a1a1ab;
+  --color-faint: #71717b;
+  --color-line: #292930;
 
-  --color-brand: #1f3a5f;
-  --color-brand-soft: #eef1f6;
+  --color-brand: #6aa5ff;
+  --color-brand-soft: #18253d;
 
-  --color-ok: #2f7d52;
-  --color-ok-soft: #e8f0ea;
-  --color-warn: #b06a18;
-  --color-warn-soft: #f6efe1;
-  --color-danger: #b23b3b;
-  --color-danger-soft: #f5e9e9;
-  --color-replay: #5a4b8a;
-  --color-replay-soft: #ece9f3;
+  --color-ok: #46c98a;
+  --color-ok-soft: #112620;
+  --color-warn: #e2a544;
+  --color-warn-soft: #271f12;
+  --color-danger: #f0706e;
+  --color-danger-soft: #2a1718;
+  --color-replay: #a78bfa;
+  --color-replay-soft: #1f1b33;
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
-    Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas,
-    monospace;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono",
+    Menlo, Consolas, monospace;
 }
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 body {
@@ -43,21 +45,22 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Money and any figure that sits in a column reads with tabular numerals so digits align. */
+/* Money and any figure that sits in a column reads with lining tabular numerals so digits align
+   on the decimal and the thousands. */
 .tnum {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
+  font-variant-numeric: lining-nums tabular-nums;
+  font-feature-settings: "lnum" 1, "tnum" 1;
 }
 
-/* A single, consistent focus ring in the brand color. */
+/* One consistent focus ring in the accent color. */
 :focus-visible {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
   border-radius: 3px;
 }
 
-/* The live spend fill eases when a poll brings new spend in, so a purchase landing is visible
-   as movement rather than a silent jump. Respect a reduced-motion preference. */
+/* The live spend fill eases when a poll brings new spend in, so a purchase landing reads as
+   movement rather than a silent jump. Respect a reduced-motion preference. */
 .fill {
   transition: width 600ms cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -82,6 +85,47 @@ body {
   animation: rein-pulse 2s ease-in-out infinite;
 }
 
+/* The collision proof: two purchases race one budget. The fill rushes to the limit, the loser
+   bounces off the ceiling. Pure CSS so it is deterministic, and it holds the end state under
+   reduced motion so the guarantee is still legible without movement. */
+@keyframes rein-fill-rush {
+  0% {
+    width: 0%;
+  }
+  60% {
+    width: 100%;
+  }
+  100% {
+    width: 100%;
+  }
+}
+
+@keyframes rein-bounce {
+  0%,
+  55% {
+    transform: translateX(0);
+    opacity: 0;
+  }
+  60% {
+    opacity: 1;
+  }
+  72% {
+    transform: translateX(var(--rein-bounce-in, 38%));
+  }
+  100% {
+    transform: translateX(var(--rein-bounce-out, 8%));
+    opacity: 1;
+  }
+}
+
+.collide-fill {
+  animation: rein-fill-rush 1900ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.collide-loser {
+  animation: rein-bounce 1900ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .live-dot {
     animation: none;
@@ -90,5 +134,16 @@ body {
   /* Skeleton loaders should not pulse when motion is reduced either. */
   .animate-pulse {
     animation: none;
+  }
+
+  .collide-fill {
+    animation: none;
+    width: 100%;
+  }
+
+  .collide-loser {
+    animation: none;
+    opacity: 1;
+    transform: translateX(8%);
   }
 }

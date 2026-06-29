@@ -20,7 +20,9 @@ const SCENARIOS: { key: DemoScenario; title: string; description: string }[] = [
   { key: "wrong-category", title: "Wrong-category block", description: "A category with no room is blocked while another has room." },
   { key: "over-budget", title: "Over-budget block", description: "A purchase larger than the remaining budget is blocked." },
   { key: "race", title: "Concurrent race", description: "Two purchases race one budget. DSQL commits exactly one." },
+  { key: "shared-cap", title: "Shared team cap", description: "Two agents under one team budget. DSQL enforces the shared ceiling." },
   { key: "replay", title: "Replay block", description: "The same signed payment cannot be charged twice." },
+  { key: "kill-switch", title: "Instant kill-switch", description: "A revoked agent is stopped on its very next decision." },
   { key: "tampered", title: "Tampered mandate block", description: "A changed mandate fails signature verification." },
 ];
 
@@ -165,7 +167,7 @@ export function DemoPanel() {
               type="button"
               onClick={() => run(scenario.key)}
               disabled={running !== null}
-              className="shrink-0 rounded-md bg-brand px-3.5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
+              className="shrink-0 rounded-md bg-brand px-3.5 py-2 text-sm font-semibold text-canvas hover:opacity-90 disabled:opacity-60"
             >
               {running === scenario.key ? "Running" : "Run"}
             </button>

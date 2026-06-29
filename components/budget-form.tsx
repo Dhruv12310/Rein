@@ -124,7 +124,7 @@ export function BudgetForm({
         <button
           type="submit"
           disabled={submission.kind === "saving"}
-          className="rounded-md bg-brand px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
+          className="rounded-md bg-brand px-4 py-2 text-sm font-semibold text-canvas hover:opacity-90 disabled:opacity-60"
         >
           {submission.kind === "saving" ? "Saving" : "Save budget"}
         </button>

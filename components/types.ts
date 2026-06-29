@@ -18,6 +18,17 @@ export type AgentSpend = {
 
 export type SpendResponse = { period: string; agents: AgentSpend[] };
 
+export type OverviewStats = {
+  totalLimitCents: string;
+  totalSpentCents: string;
+  totalRemainingCents: string;
+  budgetCount: number;
+  overspentBudgets: number;
+  decisions: { approved: number; blocked: number; total: number };
+};
+
+export type OverviewResponse = { period: string; stats: OverviewStats; agents: AgentSpend[] };
+
 export type Transaction = {
   id: string;
   amountCents: string;
