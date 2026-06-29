@@ -32,6 +32,53 @@ Three layers, with all durable state in one place.
 
 Every database call runs on the Node.js runtime, never the Edge runtime, because a Postgres connection needs raw TCP. The connection authenticates with IAM through the official Aurora DSQL node-postgres connector, which mints a short-lived token per connection over TLS, so no database password is ever stored.
 
+```mermaid
+flowchart TD
+  A["AI agent, signs the AP2 mandate with Ed25519"]
+  FE["Browser, Next.js on Vercel<br/>Overview, Budgets, Activity, Audit, Demo"]
+  subgraph CP["Control plane, Node.js route handlers on Vercel"]
+    READ["Read APIs, GET<br/>overview, spend, agents, transactions, audit, health"]
+    subgraph PE["Purchase engine, one transaction, OCC retry"]
+      direction TB
+      P1["1 verify mandate chain, Ed25519"]
+      P2["2 kill-switch, agent active"]
+      P3["3 read budgets and ancestor caps"]
+      P4["4 budget check"]
+      P5["5 claim single-use payment"]
+      P6["6 decrement remaining_cents, the OCC point"]
+      P7["7 write transaction, two ledger rows, the chain"]
+      P8["8 COMMIT"]
+      P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8
+      P8 -. "on 40001, re-read and re-run" .-> P1
+    end
+  end
+  subgraph DB["Amazon Aurora DSQL, IAM, TLS, optimistic concurrency"]
+    direction LR
+    agents[("agents")]
+    budgets[("budgets<br/>remaining_cents")]
+    mandates[("mandates")]
+    transactions[("transactions")]
+    ledger[("ledger_entries")]
+    redeemed[("redeemed_payments")]
+  end
+  subgraph SEC["Security and compliance"]
+    direction TB
+    S1["IAM token per connection, no stored password, TLS"]
+    S2["signatures verified before any write, intent scope enforced"]
+    S3["content-hash chain, tamper-evident, single-use replay block"]
+    S4["least-privilege IAM, secrets in env only, input validated"]
+    S5["immutable, ordered, exportable audit trail, instant kill-switch"]
+  end
+  A -->|"signed request, HTTPS and TLS"| FE
+  FE -->|"fetch and POST, money as strings"| READ
+  FE --> PE
+  READ --> DB
+  PE -->|"IAM token, TLS"| DB
+  CP -. "enforced by" .-> SEC
+```
+
+A higher-fidelity version of this diagram, with the full security and compliance posture, is at [`public/architecture.html`](public/architecture.html), served live at `/architecture.html`.
+
 ## The mandate chain
 
 Each purchase is authorized by three signed objects, the AP2 Intent, Cart, and Payment mandates, each an Ed25519 signature over a strict canonical JSON form of its content. The chain is linked by content hashes: the cart references the hash of the intent, and the payment references the hashes of both, so changing any field after signing breaks the chain on verification. The server verifies the three signatures, the chain links, and the intent scope (amount cap, allowed categories and vendors, expiry) before any money moves, and the verified chain is persisted alongside the ledger entry so an approved purchase has a queryable, tamper-evident receipt.

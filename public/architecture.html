@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rein, System Architecture</title>
+    <style>
+      :root {
+        --canvas: #0c0c0e;
+        --surface: #141417;
+        --raised: #1c1c21;
+        --ink: #ededf1;
+        --muted: #a1a1ab;
+        --faint: #9a9aa3;
+        --line: #292930;
+        --brand: #6aa5ff;
+        --brand-soft: #18253d;
+        --ok: #46c98a;
+        --ok-soft: #112620;
+        --warn: #e2a544;
+        --warn-soft: #271f12;
+        --danger: #f0706e;
+        --replay: #a78bfa;
+        --replay-soft: #1f1b33;
+        --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+          sans-serif;
+        --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--canvas);
+        color: var(--ink);
+        font-family: var(--sans);
+        -webkit-font-smoothing: antialiased;
+        font-variant-numeric: lining-nums tabular-nums;
+      }
+      .page {
+        max-width: 1320px;
+        margin: 0 auto;
+        padding: 40px 32px 56px;
+      }
+      header.top {
+        display: flex;
+        align-items: baseline;
+        gap: 14px;
+        flex-wrap: wrap;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 18px;
+        margin-bottom: 26px;
+      }
+      .wordmark {
+        font-size: 26px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      .tagline {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 22px;
+        align-items: start;
+      }
+      @media (max-width: 980px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      .lbl {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        color: var(--faint);
+        font-weight: 600;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px 18px;
+      }
+      .card.raised {
+        background: var(--raised);
+      }
+      .layer-title {
+        font-size: 15px;
+        font-weight: 600;
+        margin: 4px 0 2px;
+      }
+      .layer-sub {
+        color: var(--muted);
+        font-size: 12.5px;
+        line-height: 1.5;
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-top: 12px;
+      }
+      .chip {
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: var(--raised);
+        border: 1px solid var(--line);
+        color: var(--ink);
+      }
+      .chip.brand {
+        background: var(--brand-soft);
+        border-color: transparent;
+        color: var(--brand);
+      }
+      .chip.mono {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        color: var(--muted);
+      }
+      .arrow {
+        text-align: center;
+        color: var(--faint);
+        font-size: 12.5px;
+        padding: 7px 0;
+        position: relative;
+      }
+      .arrow span {
+        background: var(--canvas);
+        padding: 0 10px;
+        position: relative;
+        z-index: 1;
+      }
+      .arrow::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 0;
+        bottom: 0;
+        border-left: 1px dashed var(--line);
+      }
+      .arrow b {
+        color: var(--brand);
+        font-weight: 500;
+      }
+      .cp {
+        display: grid;
+        grid-template-columns: 0.92fr 1.08fr;
+        gap: 16px;
+        margin-top: 14px;
+      }
+      @media (max-width: 720px) {
+        .cp {
+          grid-template-columns: 1fr;
+        }
+      }
+      .api {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        color: var(--muted);
+        line-height: 1.85;
+      }
+      .api .m {
+        color: var(--ok);
+      }
+      .api .w {
+        color: var(--brand);
+      }
+      .pipe {
+        position: relative;
+      }
+      .step {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        padding: 6px 0;
+      }
+      .num {
+        flex: none;
+        width: 20px;
+        height: 20px;
+        border-radius: 6px;
+        background: var(--raised);
+        border: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        display: grid;
+        place-items: center;
+        margin-top: 1px;
+      }
+      .step .t {
+        font-size: 12.5px;
+        line-height: 1.45;
+      }
+      .step .t small {
+        color: var(--faint);
+      }
+      .step.crit .num {
+        background: var(--ok-soft);
+        border-color: transparent;
+        color: var(--ok);
+      }
+      .step.crit .t b {
+        color: var(--ok);
+      }
+      .occ {
+        margin-top: 10px;
+        font-size: 11.5px;
+        color: var(--warn);
+        background: var(--warn-soft);
+        border: 1px solid transparent;
+        border-radius: 8px;
+        padding: 7px 10px;
+        font-family: var(--mono);
+      }
+      .blocked {
+        margin-top: 7px;
+        font-size: 11.5px;
+        color: var(--danger);
+      }
+      .tables {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-top: 12px;
+      }
+      @media (max-width: 720px) {
+        .tables {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+      .tbl {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 9px 11px;
+        background: var(--surface);
+      }
+      .tbl .n {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--ink);
+      }
+      .tbl .d {
+        font-size: 11px;
+        color: var(--faint);
+        margin-top: 2px;
+        line-height: 1.4;
+      }
+      .tbl.point {
+        border-color: var(--ok);
+      }
+      .tbl.point .n {
+        color: var(--ok);
+      }
+      .sec {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .sctl {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        padding: 10px 12px;
+        background: var(--surface);
+      }
+      .sctl svg {
+        flex: none;
+        margin-top: 1px;
+      }
+      .sctl .h {
+        font-size: 12.5px;
+        font-weight: 600;
+      }
+      .sctl .b {
+        font-size: 11.5px;
+        color: var(--muted);
+        line-height: 1.45;
+        margin-top: 1px;
+      }
+      .legend {
+        margin-top: 26px;
+        border-top: 1px solid var(--line);
+        padding-top: 16px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+        font-size: 11.5px;
+        color: var(--faint);
+      }
+      .legend b {
+        color: var(--muted);
+        font-weight: 500;
+      }
+      .dot {
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        border-radius: 3px;
+        vertical-align: middle;
+        margin-right: 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="top">
+        <span class="wordmark">Rein</span>
+        <span class="tagline">
+          System architecture. Spend control and a tamper-evident audit trail for AI agents, on
+          Amazon Aurora DSQL.
+        </span>
+      </header>
+
+      <div class="grid">
+        <!-- MAIN FLOW -->
+        <div>
+          <!-- Actor -->
+          <div class="lbl" style="margin-bottom: 8px">Actor</div>
+          <div class="card">
+            <div class="layer-title">AI agent (procurement, plus the demo driver)</div>
+            <div class="layer-sub">
+              Holds Ed25519 keypairs for the principal, the vendor, and the agent. Builds and signs
+              the AP2 mandate bundle for each purchase. Private keys never leave the server.
+            </div>
+            <div class="chips">
+              <span class="chip brand">Intent, signed by the principal</span>
+              <span class="chip brand">Cart, signed by the vendor</span>
+              <span class="chip brand">Payment, signed by the agent</span>
+            </div>
+          </div>
+
+          <div class="arrow"><span>signed purchase request, over <b>HTTPS / TLS</b></span></div>
+
+          <!-- Client -->
+          <div class="lbl" style="margin-bottom: 8px">Frontend, on Vercel</div>
+          <div class="card">
+            <div class="layer-title">Browser, Next.js App Router</div>
+            <div class="layer-sub">
+              Client components poll the read APIs every few seconds, so spend and the activity feed
+              update on their own. State lives in React. No browser storage, so the app layer is
+              stateless and scales horizontally.
+            </div>
+            <div class="chips">
+              <span class="chip">Overview</span>
+              <span class="chip">Budgets</span>
+              <span class="chip">Activity</span>
+              <span class="chip">Audit</span>
+              <span class="chip">Demo</span>
+            </div>
+          </div>
+
+          <div class="arrow">
+            <span>fetch and POST as JSON, <b>money as strings</b> (BigInt cents)</span>
+          </div>
+
+          <!-- Control plane -->
+          <div class="lbl" style="margin-bottom: 8px">Control plane</div>
+          <div class="card raised">
+            <div class="layer-title">Next.js route handlers, Node.js runtime, Vercel functions</div>
+            <div class="layer-sub">
+              All database access runs on the Node.js runtime, never the Edge runtime, because a
+              Postgres connection needs raw TCP. Every endpoint validates its input.
+            </div>
+            <div class="cp">
+              <div>
+                <div class="lbl" style="margin-bottom: 7px">Read APIs</div>
+                <div class="api">
+                  <span class="m">GET</span> /api/overview<br />
+                  <span class="m">GET</span> /api/spend<br />
+                  <span class="m">GET</span> /api/agents<br />
+                  <span class="m">GET</span> /api/transactions<br />
+                  <span class="m">GET</span> /api/transactions/[id]/audit<br />
+                  <span class="m">GET</span> /api/health
+                </div>
+                <div class="lbl" style="margin: 12px 0 7px">Write and actions</div>
+                <div class="api">
+                  <span class="w">POST</span> /api/budgets<br />
+                  <span class="w">POST</span> /api/demo/run<br />
+                  <span class="w">POST</span> /api/demo/reset
+                </div>
+              </div>
+              <div class="pipe">
+                <div class="lbl" style="margin-bottom: 7px">
+                  Purchase engine, one transaction, OCC retry
+                </div>
+                <div class="step">
+                  <span class="num">1</span>
+                  <span class="t">
+                    <b>Verify the mandate chain</b>
+                    <small> Ed25519 over canonical JSON: signatures, hash links, intent scope</small>
+                  </span>
+                </div>
+                <div class="step">
+                  <span class="num">2</span>
+                  <span class="t">Kill-switch, the agent must be active</span>
+                </div>
+                <div class="step">
+                  <span class="num">3</span>
+                  <span class="t">Read the applicable budgets and every ancestor cap</span>
+                </div>
+                <div class="step">
+                  <span class="num">4</span>
+                  <span class="t">Budget check, does the amount fit every cap</span>
+                </div>
+                <div class="step">
+                  <span class="num">5</span>
+                  <span class="t">Claim the payment as single use (redeemed_payments key)</span>
+                </div>
+                <div class="step crit">
+                  <span class="num">6</span>
+                  <span class="t">
+                    <b>Decrement remaining_cents</b>
+                    <small> the single row two racing purchases collide on</small>
+                  </span>
+                </div>
+                <div class="step">
+                  <span class="num">7</span>
+                  <span class="t">Write the transaction, two balanced ledger rows, the chain</span>
+                </div>
+                <div class="step">
+                  <span class="num">8</span>
+                  <span class="t">COMMIT</span>
+                </div>
+                <div class="occ">on SQLSTATE 40001: roll back, re-read the balance, re-run</div>
+                <div class="blocked">Any gate fails, the purchase is blocked and recorded with its reason.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="arrow">
+            <span>connect with an <b>IAM token per connection</b>, over TLS</span>
+          </div>
+
+          <!-- Data -->
+          <div class="lbl" style="margin-bottom: 8px">Data layer, primary backend</div>
+          <div class="card">
+            <div class="layer-title">Amazon Aurora DSQL</div>
+            <div class="layer-sub">
+              Optimistic concurrency with serializable isolation, strong consistency, and it scales
+              to zero between bursts. No foreign keys, so referential integrity is enforced in the
+              application. Money is integer cents in BIGINT.
+            </div>
+            <div class="tables">
+              <div class="tbl"><div class="n">agents</div><div class="d">principals that spend, with a status the kill-switch reads</div></div>
+              <div class="tbl point"><div class="n">budgets</div><div class="d">remaining_cents, the concurrency control point</div></div>
+              <div class="tbl"><div class="n">mandates</div><div class="d">the signed intent, cart, payment chain</div></div>
+              <div class="tbl"><div class="n">transactions</div><div class="d">one row per decision, with the reason</div></div>
+              <div class="tbl"><div class="n">ledger_entries</div><div class="d">two balanced rows per approved purchase</div></div>
+              <div class="tbl point"><div class="n">redeemed_payments</div><div class="d">payment hash as the key, single use</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SECURITY RAIL -->
+        <div>
+          <div class="lbl" style="margin-bottom: 8px">Security and compliance</div>
+          <div class="sec">
+            <div class="sctl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6aa5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>
+              <div><div class="h">Authentication</div><div class="b">IAM SigV4 token minted per connection. No database password is ever stored. TLS is required.</div></div>
+            </div>
+            <div class="sctl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6aa5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+              <div><div class="h">Authorization, verified before any write</div><div class="b">Three Ed25519 signatures, the principal, the vendor, and the agent, checked on the server before money moves.</div></div>
+            </div>
+            <div class="sctl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6aa5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              <div><div class="h">Scope enforcement</div><div class="b">The intent limits the amount, the categories, the vendors, and the expiry. Out of scope is blocked.</div></div>
+            </div>
+            <div class="sctl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>
+              <div><div class="h">Tamper evidence</div><div class="b">A content-hash chain, payment equals hash of intent plus cart. Changing any field breaks the chain.</div></div>
+            </div>
+            <div class="sctl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+              <div><div class="h">Replay protection</div><div class="b">A payment is single use. A second redemption collides on the primary key and is recorded as a replay.</div></div>
+            </div>
+            <div class="sctl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#46c98a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              <div><div class="h">Least privilege</div><div class="b">The IAM identity grants only dsql:DbConnectAdmin, scoped to one cluster.</div></div>
+            </div>
+            <div class="sctl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#46c98a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              <div><div class="h">Secrets management</div><div class="b">Credentials live only in environment variables, never in the repository. The env file is gitignored.</div></div>
+            </div>
+            <div class="sctl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#46c98a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              <div><div class="h">Immutable audit, compliance ready</div><div class="b">Every decision is recorded with its reason. The double-entry ledger and the signed chain make the trail complete, ordered, and tamper evident.</div></div>
+            </div>
+            <div class="sctl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e2a544" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64A9 9 0 1 1 5.64 6.64"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+              <div><div class="h">Containment</div><div class="b">An instant kill-switch revokes an agent, and it is stopped on its very next decision, with no propagation window.</div></div>
+            </div>
+            <div class="sctl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a1a1ab" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/></svg>
+              <div><div class="h">Data safety and isolation</div><div class="b">Money is integer cents in BIGINT, never a float. Database access is pinned to the Node.js runtime, not the Edge.</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span><b>Layers, top to bottom:</b> agent, browser, control plane, ledger</span>
+        <span><span class="dot" style="background: var(--ok)"></span><b>green</b> the concurrency control point and the no-overspend guarantee</span>
+        <span><span class="dot" style="background: var(--brand)"></span><b>blue</b> the request path and authorization</span>
+        <span><span class="dot" style="background: var(--replay)"></span><b>violet</b> integrity and replay</span>
+        <span><span class="dot" style="background: var(--warn)"></span><b>amber</b> the optimistic-concurrency retry</span>
+      </div>
+    </div>
+  </body>
+</html>
